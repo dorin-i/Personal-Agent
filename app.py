@@ -21,7 +21,7 @@ AUTHORITY = "https://login.microsoftonline.com/common"
 REDIRECT_PATH = "/callback"
 REDIRECT_URI = BASE_URL + REDIRECT_PATH
 
-SCOPES = ['User.Read', 'Files.ReadWrite']
+SCOPES = ["User.Read", "Files.ReadWrite.AppFolder"]
 
 
 def msal_app():
