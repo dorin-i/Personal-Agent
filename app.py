@@ -1,7 +1,7 @@
 import os
 from flask import Flask, redirect, request, session, url_for, jsonify
 import requests
-import msal
+import msal 
 
 app = Flask(__name__)
 
