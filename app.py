@@ -1,7 +1,7 @@
 import os
 from flask import Flask, redirect, request, session, url_for, jsonify
 import requests
-import msal 
+import msal
 
 app = Flask(__name__)
 
@@ -13,14 +13,16 @@ CLIENT_SECRET = os.environ.get("CLIENT_SECRET")
 
 BASE_URL = os.environ.get("BASE_URL", "https://personal-agent-zymv.onrender.com").rstrip("/")
 
-TARGET_FOLDER = os.environ.get("TARGET_FOLDER", "Agent")
+TARGET_FOLDER = os.environ.get("TARGET_FOLDER", "Agent")  # not used in AppFolder mode
 TARGET_FILE = os.environ.get("TARGET_FILE", "Master_Dorin_Agent.xlsx")
+APP_FILE_NAME = TARGET_FILE
 
 # For personal + work accounts
 AUTHORITY = "https://login.microsoftonline.com/common"
 REDIRECT_PATH = "/callback"
 REDIRECT_URI = BASE_URL + REDIRECT_PATH
 
+# AppFolder-only scope
 SCOPES = ["User.Read", "Files.ReadWrite.AppFolder"]
 
 
@@ -53,12 +55,31 @@ def graph_get(url, access_token, params=None):
     return requests.get(url, headers=headers, params=params, timeout=30)
 
 
+def graph_put(url, access_token, data: bytes, content_type: str):
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": content_type,
+    }
+    return requests.put(url, headers=headers, data=data, timeout=60)
+
+
+def find_child_by_name(children, name):
+    for c in children:
+        if c.get("name", "").lower() == name.lower():
+            return c
+    return None
+
+
 @app.route("/")
 def home():
     return """
     <h1>Personal Agent</h1>
     <p>Server running OK.</p>
-    <a href="/login">Login</a>
+    <ul>
+      <li><a href="/login">Login</a></li>
+      <li><a href="/files">List AppFolder files</a></li>
+      <li><a href="/upload">Upload Excel to AppFolder</a></li>
+    </ul>
     """
 
 
@@ -84,50 +105,67 @@ def authorized():
     return redirect(url_for("files"))
 
 
-def find_child_by_name(children, name):
-    for c in children:
-        if c.get("name", "").lower() == name.lower():
-            return c
-    return None
-
-
 @app.route("/files")
 def files():
     access_token = session.get("access_token")
     if not access_token:
         return redirect(url_for("login"))
 
-    r = graph_get("https://graph.microsoft.com/v1.0/me/drive/root/children", access_token)
+    # AppFolder root (approot)
+    r = graph_get("https://graph.microsoft.com/v1.0/me/drive/special/approot/children", access_token)
     if r.status_code != 200:
         return (r.text, r.status_code, {"Content-Type": "application/json"})
 
-    root_children = r.json().get("value", [])
-    folder = find_child_by_name(root_children, TARGET_FOLDER)
-    if not folder:
-        return jsonify({
-            "ok": False,
-            "msg": f"Folder not found in OneDrive root: {TARGET_FOLDER}",
-            "hint": "Move folder to OneDrive root OR set TARGET_FOLDER correctly.",
-            "root_items": [x.get("name") for x in root_children][:50],
-        }), 404
-
-    folder_id = folder["id"]
-
-    r2 = graph_get(f"https://graph.microsoft.com/v1.0/me/drive/items/{folder_id}/children", access_token)
-    if r2.status_code != 200:
-        return (r2.text, r2.status_code, {"Content-Type": "application/json"})
-
-    items = r2.json().get("value", [])
-    file_item = find_child_by_name(items, TARGET_FILE)
+    items = r.json().get("value", [])
+    file_item = find_child_by_name(items, APP_FILE_NAME)
 
     return jsonify({
         "ok": True,
-        "folder": TARGET_FOLDER,
-        "file_expected": TARGET_FILE,
+        "scope": "AppFolder",
+        "file_expected": APP_FILE_NAME,
         "file_found": bool(file_item),
         "items": [{"name": x.get("name"), "id": x.get("id"), "type": ("folder" if "folder" in x else "file")} for x in items],
         "file_id": (file_item.get("id") if file_item else None),
     })
+
+
+@app.route("/upload", methods=["GET", "POST"])
+def upload():
+    access_token = session.get("access_token")
+    if not access_token:
+        return redirect(url_for("login"))
+
+    if request.method == "GET":
+        return f"""
+        <h2>Upload Excel to AppFolder</h2>
+        <p>Target file name: <b>{APP_FILE_NAME}</b></p>
+        <form method="POST" enctype="multipart/form-data">
+            <input type="file" name="file" accept=".xlsx" required />
+            <button type="submit">Upload</button>
+        </form>
+        """
+
+    f = request.files.get("file")
+    if not f or f.filename == "":
+        return "No file selected", 400
+
+    if not f.filename.lower().endswith(".xlsx"):
+        return "Only .xlsx allowed", 400
+
+    data = f.read()
+
+    url = f"https://graph.microsoft.com/v1.0/me/drive/special/approot:/{APP_FILE_NAME}:/content"
+    r = graph_put(
+        url,
+        access_token,
+        data=data,
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+    if r.status_code not in (200, 201):
+        return f"Upload failed: {r.status_code} {r.text}", 500
+
+    return "Upload OK. Open /files to verify.", 200
 
 
 if __name__ == "__main__":
