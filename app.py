@@ -167,6 +167,17 @@ def upload():
 
     return "Upload OK. Open /files to verify.", 200
 
+RUN_TOKEN = os.environ.get("RUN_TOKEN", "")
+
+@app.route("/run", methods=["GET"])
+def run_job():
+    token = request.args.get("token", "")
+    job = request.args.get("job", "manual")
+
+    if not RUN_TOKEN or token != RUN_TOKEN:
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    return jsonify({"ok": True, "job": job, "note": "run endpoint OK (engine next)"}), 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "10000")))
